@@ -90,6 +90,8 @@ interface Options extends ts.CompilerOptions {
   // matched by the `files` / `includes` in the `tsconfig.json`.
   // This is off by default.
   alwaysCompileGeneratedCode?: boolean;
+
+  rootedOutput?: boolean;
 }
 
 export default Options;

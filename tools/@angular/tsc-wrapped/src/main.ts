@@ -13,7 +13,7 @@ import * as ts from 'typescript';
 
 import {CompilerHostAdapter, MetadataBundler} from './bundler';
 import {CliOptions} from './cli_options';
-import {MetadataWriterHost, SyntheticIndexHost} from './compiler_host';
+import {DelegatingHost, MetadataWriterHost, SyntheticIndexHost} from './compiler_host';
 import {privateEntriesToIndex} from './index_writer';
 import NgOptions from './options';
 import {check, tsc} from './tsc';
@@ -24,6 +24,48 @@ export {UserError} from './tsc';
 const DTS = /\.d\.ts$/;
 const JS_EXT = /(\.js|)$/;
 const TS_EXT = /\.ts$/;
+
+export class MultiRootHost extends DelegatingHost {
+  private outDir: string;
+  private rootDirs: string[];
+
+  constructor(private tsickleDelegate: tsickle.TsickleCompilerHost, private options: NgOptions) {
+    super(tsickleDelegate);
+    this.outDir = options.outDir;
+    const rootedOutput = !!options.rootedOutput && !!options.outDir && (!!options.rootDirs && options.rootDirs.length > 0);
+    this.rootDirs = rootedOutput ? options.rootDirs : null;
+  }
+
+  writeFile: ts.WriteFileCallback =
+  (fileName: string, data: string, writeByteOrderMark: boolean, onError?: (message: string) => void, sourceFiles?: ts.SourceFile[]) => {
+    var outFileName = fileName;
+    if (this.rootDirs && !!sourceFiles && sourceFiles.length > 0) {
+      const sourceFileName = sourceFiles[0].fileName;
+      for (const rootDir of this.rootDirs) {
+        const relativeFileName = path.relative(rootDir, sourceFileName);
+        if (relativeFileName.indexOf('..' + path.sep) !== 0) {
+          outFileName = path.join(path.join(this.outDir, path.dirname(relativeFileName)), path.basename(fileName));
+          if (path.extname(fileName) === '.map') {
+            const sourceMap = JSON.parse(data);
+            for (var i = 0; i < sourceMap.sources.length; i++)
+              sourceMap.sources[i] = path.relative(outFileName, path.resolve(fileName, sourceMap.sources[i]))
+            data = JSON.stringify(sourceMap);
+          }
+          break;
+        }
+      }
+    }
+    this.tsickleDelegate.writeFile(outFileName, data, writeByteOrderMark, onError, sourceFiles);
+  }
+
+  public reconfigureForRun(oldProgram: ts.Program, pass: tsickle.Pass) {
+    this.tsickleDelegate.reconfigureForRun(oldProgram, pass);
+  }
+
+  public diagnostics(): ts.Diagnostic[] {
+    return this.tsickleDelegate.diagnostics;
+  }
+}
 
 export interface CodegenExtension {
   /**
@@ -110,7 +152,7 @@ export function main(
     };
 
     const tsickleCompilerHost =
-        new tsickle.TsickleCompilerHost(host, ngOptions, tsickleCompilerHostOptions, tsickleHost);
+        new MultiRootHost(new tsickle.TsickleCompilerHost(host, ngOptions, tsickleCompilerHostOptions, tsickleHost), ngOptions);
 
     const program = createProgram(tsickleCompilerHost);
 
@@ -150,7 +192,7 @@ export function main(
         // A program can be re-used only once; save the programWithCodegen to be reused by
         // metadataWriter
         programForJsEmit = createProgram(tsickleCompilerHost);
-        check(tsickleCompilerHost.diagnostics);
+        check(tsickleCompilerHost.diagnostics());
         if (diagnostics) console.timeEnd('NG downlevel');
       }
 
@@ -158,7 +200,7 @@ export function main(
         if (diagnostics) console.time('NG JSDoc');
         tsickleCompilerHost.reconfigureForRun(programForJsEmit, tsickle.Pass.CLOSURIZE);
         programForJsEmit = createProgram(tsickleCompilerHost);
-        check(tsickleCompilerHost.diagnostics);
+        check(tsickleCompilerHost.diagnostics());
         if (diagnostics) console.timeEnd('NG JSDoc');
       }
 
