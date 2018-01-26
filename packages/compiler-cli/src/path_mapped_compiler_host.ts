@@ -16,6 +16,7 @@ import {CompilerHost, CompilerHostContext} from './compiler_host';
 
 const EXT = /(\.ts|\.d\.ts|\.js|\.jsx|\.tsx)$/;
 const DTS = /\.d\.ts$/;
+const NODE_MODULES = '/node_modules/';
 
 /**
  * This version of the AotCompilerHost expects that the program will be compiled
@@ -48,6 +49,13 @@ export class PathMappedCompilerHost extends CompilerHost {
       // Any containing file gives the same result for absolute imports
       containingFile = this.getCanonicalFileName(path.join(this.basePath, 'index.ts'));
     }
+    if (containingFile.indexOf(NODE_MODULES) >= 0) {
+      m = m.replace(EXT, '');
+      const resolved = ts.resolveModuleName(m, containingFile, this.options, this.context).resolvedModule;
+      if (!resolved)
+        return null;
+      return this.getCanonicalFileName(resolved.resolvedFileName);
+    }
     for (const root of this.options.rootDirs || ['']) {
       const rootedContainingFile = path.join(root, containingFile);
       const resolved =
@@ -68,7 +76,7 @@ export class PathMappedCompilerHost extends CompilerHost {
    * Relativize the paths by checking candidate prefixes of the absolute path, to see if
    * they are resolvable by the moduleResolution strategy from the CompilerHost.
    */
-  fileNameToModuleName(importedFile: string, containingFile: string): string {
+  fileNameToModuleNameX(importedFile: string, containingFile: string): string {
     if (this.options.traceResolution) {
       console.error(
           'getImportPath from containingFile', containingFile, 'to importedFile', importedFile);
@@ -116,6 +124,23 @@ export class PathMappedCompilerHost extends CompilerHost {
   }
 
   getMetadataFor(filePath: string): ModuleMetadata[] {
+    if (filePath.indexOf(NODE_MODULES) >= 0) {
+      if (!this.context.fileExists(filePath))
+        return null !;
+      if (DTS.test(filePath)) {
+        const metadataPath = filePath.replace(DTS, '.metadata.json');
+        if (this.context.fileExists(metadataPath))
+          return this.readMetadata(metadataPath, filePath);
+        else
+          return [this.upgradeVersion1Metadata(
+              {'__symbolic': 'module', 'version': 1, 'metadata': {}}, filePath)];
+      } else {
+        const sf = this.getSourceFile(filePath);
+        sf.fileName = sf.fileName;
+        const metadata = this.metadataCollector.getMetadata(sf);
+        return metadata ? [metadata] : [];
+      }
+    }
     for (const root of this.options.rootDirs || []) {
       const rootedPath = path.join(root, filePath);
       if (!this.context.fileExists(rootedPath)) {
@@ -137,5 +162,14 @@ export class PathMappedCompilerHost extends CompilerHost {
       }
     }
     return null !;
+  }
+
+  loadResource(filePath: string): Promise<string>|string {
+    for (const root of this.options.rootDirs || []) {
+      const rootedPath = path.join(root, filePath);
+      if (this.context.fileExists(rootedPath))
+        return this.context.readResource(rootedPath);
+    }
+    return this.context.readResource(filePath);
   }
 }

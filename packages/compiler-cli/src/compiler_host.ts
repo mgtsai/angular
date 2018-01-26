@@ -232,7 +232,7 @@ export class CompilerHost implements AotCompilerHost {
     }
   }
 
-  private upgradeVersion1Metadata(v1Metadata: ModuleMetadata, dtsFilePath: string): ModuleMetadata {
+  protected upgradeVersion1Metadata(v1Metadata: ModuleMetadata, dtsFilePath: string): ModuleMetadata {
     // patch up v1 to v3 by merging the metadata with metadata collected from the d.ts file
     // as the only difference between the versions is whether all exports are contained in
     // the metadata and the `extends` clause.
